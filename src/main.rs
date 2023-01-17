@@ -18,8 +18,25 @@ struct DriveConfig {
     webhooks: Vec<String>,
 }
 
-async fn upload_chunk(http: &Http, webhook: Webhook, index: i32, file_name: &str, chunk: Vec<u8>) {
+struct WebhookData {
+    http: Arc<Http>,
+    webhook: Webhook,
+}
+
+impl Clone for WebhookData {
+    fn clone(&self) -> Self {
+        WebhookData {
+            http: self.http.clone(),
+            webhook: self.webhook.clone(),
+        }
+    }
+}
+
+async fn upload_chunk(webhook_data: WebhookData, index: i32, file_name: &str, chunk: Vec<u8>) {
+    let http = webhook_data.http.clone();
+    let webhook = webhook_data.webhook.clone();
     let cow = Cow::from(&chunk);
+
     webhook
         .execute(http, false, |w| {
             w.add_file((
@@ -39,7 +56,7 @@ async fn upload_chunk(http: &Http, webhook: Webhook, index: i32, file_name: &str
     return;
 }
 
-async fn chunk_file(http: Arc<Http>, webhooks: Vec<Webhook>) {
+async fn chunk_file(webhook_data: Vec<WebhookData>) {
     let semaphore = Arc::new(Semaphore::new(24));
 
     let path = Path::new("trial/rq.rar");
@@ -63,15 +80,14 @@ async fn chunk_file(http: Arc<Http>, webhooks: Vec<Webhook>) {
         println!("Read {} MB", data_size_mb);
         let data = (&buffer[..bytes_read]).to_vec();
         let semaphore_handle = semaphore.clone();
-        let webhook = webhooks[webhook_index].clone();
-        let http = http.clone();
+        let webhook = webhook_data[webhook_index].clone();
         let file_name = path.file_name().unwrap().to_str().unwrap();
         print!("{} ", file_name);
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore_handle.acquire().await.unwrap();
 
-            upload_chunk(&http, webhook, i, file_name, data).await;
+            upload_chunk(webhook, i, file_name, data).await;
             drop(_permit);
         });
         handles.push(handle);
@@ -100,7 +116,7 @@ async fn main() {
         panic!("No webhooks found in config file")
     }
 
-    let webhooks = Arc::new(Mutex::new(vec![]));
+    let webhooks: Arc<Mutex<Vec<WebhookData>>> = Arc::new(Mutex::new(vec![]));
 
     let http = Arc::new(Http::new(""));
     let mut webhook_handles = vec![];
@@ -113,7 +129,12 @@ async fn main() {
                 .await
                 .expect(&format!("Failed to get webhook from url: {}", webhook));
             let mut webhook_vec = webhook_clone.lock().unwrap();
-            webhook_vec.push(webhook);
+            webhook_vec.push({
+                WebhookData {
+                    http: http.clone(),
+                    webhook: webhook.clone(),
+                }
+            });
         });
         webhook_handles.push(handle);
     }
@@ -124,7 +145,7 @@ async fn main() {
 
     let webhooks_clone = webhooks.clone().lock().unwrap().to_vec();
 
-    chunk_file(http, webhooks_clone).await;
+    chunk_file(webhooks_clone).await;
     let duration = start.elapsed();
     println!("Time taken: {:?}s", duration);
 }
