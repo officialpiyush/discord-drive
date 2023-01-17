@@ -118,11 +118,19 @@ async fn main() {
 
     let webhooks: Arc<Mutex<Vec<WebhookData>>> = Arc::new(Mutex::new(vec![]));
 
-    let http = Arc::new(Http::new(""));
+    let http_one = Arc::new(Http::new(""));
+    let http_two = Arc::new(Http::new(""));
+
     let mut webhook_handles = vec![];
 
+    let mut webhook_index = 1;
     for webhook in cfg.webhooks {
-        let http = http.clone();
+        let http = if webhook_index % 2 != 0 {
+            http_one.clone()
+        } else {
+            http_two.clone()
+        };
+
         let webhook_clone = webhooks.clone();
         let handle = tokio::spawn(async move {
             let webhook = Webhook::from_url(http.as_ref(), &webhook)
@@ -137,6 +145,7 @@ async fn main() {
             });
         });
         webhook_handles.push(handle);
+        webhook_index += 1;
     }
 
     join_all(webhook_handles).await;
