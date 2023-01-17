@@ -3,11 +3,12 @@ use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
-    io::{self, Read},
+    io::{BufReader, Read},
     path::Path,
-    time::{Duration, Instant},
+    sync::Arc,
+    time::{Instant, Duration},
 };
-use tokio::time;
+use tokio::{sync::Semaphore, time};
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct DriveConfig {
@@ -23,11 +24,14 @@ async fn upload_chunk(index: i32, chunk: Vec<u8>) {
     );
 }
 
-async fn open_file() {
+async fn chunk_file() {
+    let semaphore = Arc::new(Semaphore::new(24));
+
     let file = File::open("trial/rq.rar").unwrap();
     let metadata = file.metadata().unwrap();
     let file_size = metadata.len() as usize;
-    let mut reader = io::BufReader::new(file);
+
+    let mut reader = BufReader::new(file);
     let buffer_size = 7 * 1024 * 1024; // 8MB buffer
     let mut buffer = vec![0; buffer_size];
     let mut i = 0;
@@ -40,9 +44,14 @@ async fn open_file() {
         }
         let data_size_mb = bytes_read as f64 / (1024.0 * 1024.0);
         println!("Read {} MB", data_size_mb);
-        let data = &buffer[..bytes_read];
-        let vec_data = data.to_vec();
-        let handle = tokio::spawn(upload_chunk(i, vec_data));
+        let data = (&buffer[..bytes_read]).to_vec();
+        let semaphore_handle = semaphore.clone();
+
+        let handle = tokio::spawn(async move {
+            let _permit = semaphore_handle.acquire().await.unwrap();
+            upload_chunk(i, data).await;
+            drop(_permit);
+        });
         handles.push(handle);
         i += 1;
     }
@@ -66,7 +75,7 @@ async fn main() {
 
     println!("Webhooks: {:?}", cfg.webhooks);
 
-    open_file().await;
+    chunk_file().await;
     let duration = start.elapsed();
-    println!("Time taken: {:?}", duration);
+    println!("Time taken: {:?}s", duration);
 }
