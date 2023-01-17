@@ -1,33 +1,49 @@
 use confy;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use serenity::{http::Http, model::webhook::Webhook};
 use std::{
+    borrow::Cow,
     fs::File,
     io::{BufReader, Read},
     path::Path,
-    sync::Arc,
-    time::{Instant, Duration},
+    sync::{Arc, Mutex},
+    time::Instant,
+    vec,
 };
-use tokio::{sync::Semaphore, time};
+use tokio::sync::Semaphore;
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct DriveConfig {
     webhooks: Vec<String>,
 }
 
-async fn upload_chunk(index: i32, chunk: Vec<u8>) {
-    time::sleep(Duration::from_secs(4)).await;
+async fn upload_chunk(http: &Http, webhook: Webhook, index: i32, file_name: &str, chunk: Vec<u8>) {
+    let cow = Cow::from(&chunk);
+    webhook
+        .execute(http, false, |w| {
+            w.add_file((
+                cow.as_ref(),
+                format!("{}.part{}", file_name, index).as_str(),
+            ));
+
+            w
+        })
+        .await
+        .expect("Failed to upload chunk");
     println!(
         "chunk number {} successfully uploaded | {} size",
         index,
         chunk.len()
     );
+    return;
 }
 
-async fn chunk_file() {
+async fn chunk_file(http: Arc<Http>, webhooks: Vec<Webhook>) {
     let semaphore = Arc::new(Semaphore::new(24));
 
-    let file = File::open("trial/rq.rar").unwrap();
+    let path = Path::new("trial/rq.rar");
+    let file = File::open(path).unwrap();
     let metadata = file.metadata().unwrap();
     let file_size = metadata.len() as usize;
 
@@ -35,6 +51,7 @@ async fn chunk_file() {
     let buffer_size = 7 * 1024 * 1024; // 8MB buffer
     let mut buffer = vec![0; buffer_size];
     let mut i = 0;
+    let mut webhook_index = 0;
     let mut handles = vec![];
 
     loop {
@@ -46,14 +63,24 @@ async fn chunk_file() {
         println!("Read {} MB", data_size_mb);
         let data = (&buffer[..bytes_read]).to_vec();
         let semaphore_handle = semaphore.clone();
+        let webhook = webhooks[webhook_index].clone();
+        let http = http.clone();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        print!("{} ", file_name);
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore_handle.acquire().await.unwrap();
-            upload_chunk(i, data).await;
+
+            upload_chunk(&http, webhook, i, file_name, data).await;
             drop(_permit);
         });
         handles.push(handle);
         i += 1;
+        if webhook_index >= 11 {
+            webhook_index = 0;
+        } else {
+            webhook_index += 1;
+        }
     }
 
     join_all(handles).await;
@@ -73,9 +100,31 @@ async fn main() {
         panic!("No webhooks found in config file")
     }
 
-    println!("Webhooks: {:?}", cfg.webhooks);
+    let webhooks = Arc::new(Mutex::new(vec![]));
 
-    chunk_file().await;
+    let http = Arc::new(Http::new(""));
+    let mut webhook_handles = vec![];
+
+    for webhook in cfg.webhooks {
+        let http = http.clone();
+        let webhook_clone = webhooks.clone();
+        let handle = tokio::spawn(async move {
+            let webhook = Webhook::from_url(http.as_ref(), &webhook)
+                .await
+                .expect(&format!("Failed to get webhook from url: {}", webhook));
+            let mut webhook_vec = webhook_clone.lock().unwrap();
+            webhook_vec.push(webhook);
+        });
+        webhook_handles.push(handle);
+    }
+
+    join_all(webhook_handles).await;
+
+    print!("Webhooks: {} ", webhooks.lock().unwrap().len());
+
+    let webhooks_clone = webhooks.clone().lock().unwrap().to_vec();
+
+    chunk_file(http, webhooks_clone).await;
     let duration = start.elapsed();
     println!("Time taken: {:?}s", duration);
 }
