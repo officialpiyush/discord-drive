@@ -62,7 +62,9 @@ async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_ur
         url: attachment_url,
     };
 
-    let added = db
+    let mut transaction = db.begin_transaction().await.unwrap();
+
+    let _added = db
         .fluent()
         .update()
         .fields(paths!(MasterDirectoryChild::parts))
@@ -70,12 +72,17 @@ async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_ur
         .document_id(&master_directory_child.name)
         .transforms(|transform_builder| {
             vec![transform_builder
-                .field("parts")
-                .append_missing_elements(vec![&master_directory_child])
+                .field(path!(MasterDirectoryChild::parts))
+                .append_missing_elements([&master_directory_child])
                 .unwrap()]
-        });
+        })
+        .only_transform()
+        .add_to_transaction(&mut transaction)
+        .unwrap();
 
-    println!("Added to database: {:?}", added);
+    transaction.commit().await.unwrap();
+
+    println!("Added to database");
 }
 
 async fn upload_chunk(
