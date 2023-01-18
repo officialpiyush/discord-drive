@@ -1,3 +1,4 @@
+service_account_file_location = "./config/service_account.json"
 webhooks = [
     "",
     "",

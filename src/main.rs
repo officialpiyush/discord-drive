@@ -1,9 +1,11 @@
 use confy;
+use firestore::FirestoreDb;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serenity::{http::Http, model::webhook::Webhook};
 use std::{
     borrow::Cow,
+    env::set_var,
     fs::File,
     io::{BufReader, Read},
     path::Path,
@@ -16,6 +18,7 @@ use tokio::sync::Semaphore;
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct DriveConfig {
     webhooks: Vec<String>,
+    service_account_file_location: String,
 }
 
 struct WebhookData {
@@ -111,6 +114,15 @@ async fn main() {
     println!("Hello, world!");
     let config_path = Path::new("config/config.toml");
     let cfg: DriveConfig = confy::load_path(config_path).unwrap();
+
+    set_var(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        cfg.service_account_file_location,
+    );
+
+    let db = FirestoreDb::new("discord-ddrive").await.unwrap();
+
+    dbg!(db);
 
     if cfg.webhooks.len() <= 0 {
         panic!("No webhooks found in config file")
