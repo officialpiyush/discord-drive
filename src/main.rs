@@ -1,5 +1,6 @@
 use confy;
-use firestore::FirestoreDb;
+use firestore::*;
+use firestore::{paths, FirestoreDb};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serenity::{http::Http, model::webhook::Webhook};
@@ -14,6 +15,23 @@ use std::{
     vec,
 };
 use tokio::sync::Semaphore;
+
+const MASTER_DIRECTORY_COLLECTION_NAME: &'static str = "master_directory";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MasterDirectoryChildPart {
+    name: String,
+    id: String,
+    part: i32,
+    parent: String,
+    url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct MasterDirectoryChild {
+    name: String,
+    parts: Vec<MasterDirectoryChildPart>,
+}
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct DriveConfig {
@@ -35,12 +53,43 @@ impl Clone for WebhookData {
     }
 }
 
-async fn upload_chunk(webhook_data: WebhookData, index: i32, file_name: &str, chunk: Vec<u8>) {
+async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_url: String) {
+    let master_directory_child: MasterDirectoryChildPart = MasterDirectoryChildPart {
+        name: name.clone(),
+        id: format!("{}.part{}", &name, part),
+        part: part,
+        parent: name,
+        url: attachment_url,
+    };
+
+    let added = db
+        .fluent()
+        .update()
+        .fields(paths!(MasterDirectoryChild::parts))
+        .in_col(MASTER_DIRECTORY_COLLECTION_NAME)
+        .document_id(&master_directory_child.name)
+        .transforms(|transform_builder| {
+            vec![transform_builder
+                .field("parts")
+                .append_missing_elements(vec![&master_directory_child])
+                .unwrap()]
+        });
+
+    println!("Added to database: {:?}", added);
+}
+
+async fn upload_chunk(
+    webhook_data: WebhookData,
+    db: FirestoreDb,
+    index: i32,
+    file_name: &str,
+    chunk: Vec<u8>,
+) {
     let http = webhook_data.http.clone();
     let webhook = webhook_data.webhook.clone();
     let cow = Cow::from(&chunk);
 
-    webhook
+    let res = webhook
         .execute(http, false, |w| {
             w.add_file((
                 cow.as_ref(),
@@ -51,15 +100,29 @@ async fn upload_chunk(webhook_data: WebhookData, index: i32, file_name: &str, ch
         })
         .await
         .expect("Failed to upload chunk");
-    println!(
-        "chunk number {} successfully uploaded | {} size",
-        index,
-        chunk.len()
-    );
-    return;
+
+    match res {
+        Some(message) => {
+            let attachment_url = message
+                .attachments
+                .first()
+                .expect("No attachments found")
+                .url
+                .clone();
+
+            add_to_database(db, file_name.to_string(), index, attachment_url).await;
+
+            println!("chunk number {} successfully uploaded", index,);
+            return;
+        }
+        None => {
+            println!("Error: couldnt upload chunk {}", index);
+            return;
+        }
+    }
 }
 
-async fn chunk_file(webhook_data: Vec<WebhookData>) {
+async fn chunk_file(webhook_data: Vec<WebhookData>, db: FirestoreDb) {
     let semaphore = Arc::new(Semaphore::new(24));
 
     let path = Path::new("trial/rq.rar");
@@ -74,6 +137,21 @@ async fn chunk_file(webhook_data: Vec<WebhookData>) {
     let mut webhook_index = 0;
     let mut handles = vec![];
 
+    let master_directory: MasterDirectoryChild = MasterDirectoryChild {
+        name: path.file_name().unwrap().to_str().unwrap().to_string(),
+        parts: vec![],
+    };
+
+    let _master_directory: MasterDirectoryChild = db
+        .fluent()
+        .insert()
+        .into(MASTER_DIRECTORY_COLLECTION_NAME)
+        .document_id(&master_directory.name)
+        .object(&master_directory)
+        .execute()
+        .await
+        .unwrap();
+
     loop {
         let bytes_read = reader.read(&mut buffer).unwrap();
         if bytes_read == 0 {
@@ -84,13 +162,14 @@ async fn chunk_file(webhook_data: Vec<WebhookData>) {
         let data = (&buffer[..bytes_read]).to_vec();
         let semaphore_handle = semaphore.clone();
         let webhook = webhook_data[webhook_index].clone();
+        let db = db.clone();
         let file_name = path.file_name().unwrap().to_str().unwrap();
         print!("{} ", file_name);
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore_handle.acquire().await.unwrap();
 
-            upload_chunk(webhook, i, file_name, data).await;
+            upload_chunk(webhook, db, i, file_name, data).await;
             drop(_permit);
         });
         handles.push(handle);
@@ -121,8 +200,6 @@ async fn main() {
     );
 
     let db = FirestoreDb::new("discord-ddrive").await.unwrap();
-
-    dbg!(db);
 
     if cfg.webhooks.len() <= 0 {
         panic!("No webhooks found in config file")
@@ -166,7 +243,8 @@ async fn main() {
 
     let webhooks_clone = webhooks.clone().lock().unwrap().to_vec();
 
-    chunk_file(webhooks_clone).await;
+    // let db_clone = Arc::new(db);
+    chunk_file(webhooks_clone, db).await;
     let duration = start.elapsed();
     println!("Time taken: {:?}s", duration);
 }
