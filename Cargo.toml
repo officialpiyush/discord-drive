@@ -16,3 +16,4 @@ serde = { version = "1.0", features = ["derive"] }
 confy = "0.5.1"
 futures = "0.3.25"
 firestore = "0.25.0"
+reqwest = "0.11.13"
