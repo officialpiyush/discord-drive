@@ -115,7 +115,7 @@ async fn upload_chunk(
     webhook_data: WebhookData,
     db: FirestoreDb,
     index: i32,
-    file_name: &str,
+    file_name: String,
     chunk: Vec<u8>,
 ) {
     let http = webhook_data.http.clone();
@@ -158,7 +158,7 @@ async fn upload_chunk(
 async fn chunk_file(file_path: PathBuf, webhook_data: Vec<WebhookData>, db: FirestoreDb) {
     let semaphore = Arc::new(Semaphore::new(24));
 
-    let file = std::fs::File::open(file_path).unwrap();
+    let file = std::fs::File::open(&file_path).unwrap();
     let metadata = file.metadata().unwrap();
     let file_size = metadata.len() as usize;
 
@@ -170,7 +170,7 @@ async fn chunk_file(file_path: PathBuf, webhook_data: Vec<WebhookData>, db: Fire
     let mut handles = vec![];
 
     let master_directory: MasterDirectoryChild = MasterDirectoryChild {
-        name: path.file_name().unwrap().to_str().unwrap().to_string(),
+        name: file_path.file_name().unwrap().to_str().unwrap().to_string(),
         parts: vec![],
     };
 
@@ -195,7 +195,12 @@ async fn chunk_file(file_path: PathBuf, webhook_data: Vec<WebhookData>, db: Fire
         let semaphore_handle = semaphore.clone();
         let webhook = webhook_data[webhook_index].clone();
         let db = db.clone();
-        let file_name = file_path.file_name().unwrap().to_str().unwrap();
+        let file_name = (&file_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore_handle.acquire().await.unwrap();
