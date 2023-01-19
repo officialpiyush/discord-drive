@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serenity::{http::Http, model::webhook::Webhook};
 use std::fs::File;
 use std::io::BufWriter;
+use std::path::PathBuf;
 use std::{
     borrow::Cow,
     env::set_var,
@@ -15,10 +16,33 @@ use std::{
     time::Instant,
     vec,
 };
+use structopt::StructOpt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 const MASTER_DIRECTORY_COLLECTION_NAME: &'static str = "master_directory";
+
+#[derive(StructOpt, Debug)]
+#[structopt(name = "discord_drive")]
+struct Opts {
+    #[structopt(subcommand)]
+    command: Command,
+}
+
+#[derive(StructOpt, Debug)]
+enum Command {
+    #[structopt(name = "store")]
+    Store {
+        #[structopt(name = "file", parse(from_os_str))]
+        file: std::path::PathBuf,
+    },
+
+    #[structopt(name = "retrieve")]
+    Retrieve {
+        #[structopt(name = "word")]
+        word: String,
+    },
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct MasterDirectoryChildPart {
@@ -131,11 +155,10 @@ async fn upload_chunk(
     }
 }
 
-async fn chunk_file(webhook_data: Vec<WebhookData>, db: FirestoreDb) {
+async fn chunk_file(file_path: PathBuf, webhook_data: Vec<WebhookData>, db: FirestoreDb) {
     let semaphore = Arc::new(Semaphore::new(24));
 
-    let path = Path::new("trial/rq.rar");
-    let file = std::fs::File::open(path).unwrap();
+    let file = std::fs::File::open(file_path).unwrap();
     let metadata = file.metadata().unwrap();
     let file_size = metadata.len() as usize;
 
@@ -172,7 +195,7 @@ async fn chunk_file(webhook_data: Vec<WebhookData>, db: FirestoreDb) {
         let semaphore_handle = semaphore.clone();
         let webhook = webhook_data[webhook_index].clone();
         let db = db.clone();
-        let file_name = path.file_name().unwrap().to_str().unwrap();
+        let file_name = file_path.file_name().unwrap().to_str().unwrap();
 
         let handle = tokio::spawn(async move {
             let _permit = semaphore_handle.acquire().await.unwrap();
@@ -198,7 +221,7 @@ async fn chunk_file(webhook_data: Vec<WebhookData>, db: FirestoreDb) {
 fn merge_files(files: Vec<String>, name: &str) {
     let output_file = File::create(name).unwrap();
     // 500MB capacity
-    let mut writer = BufWriter::with_capacity(1024 * 512 * 500,output_file);
+    let mut writer = BufWriter::with_capacity(1024 * 512 * 500, output_file);
 
     for file in files {
         let input_file = File::open(format!("chunks/{}", file)).unwrap();
@@ -268,6 +291,8 @@ async fn retrieve_and_save(db: FirestoreDb, name: &str) {
 
 #[tokio::main]
 async fn main() {
+    let opts = Opts::from_args();
+
     let start = Instant::now();
     println!("Hello, world!");
     let config_path = Path::new("config/config.toml");
@@ -322,9 +347,24 @@ async fn main() {
 
     let webhooks_clone = webhooks.clone().lock().unwrap().to_vec();
 
-    // let db_clone = Arc::new(db);
-    // chunk_file(webhooks_clone, db).await;
-    retrieve_and_save(db, "rq.rar").await;
+    match opts.command {
+        Command::Store { file } => {
+            // check if file is a directory
+            if file.is_dir() {
+                eprintln!("Error: {} is a directory", file.display());
+                std::process::exit(1);
+            }
+
+            // store the file
+            println!("Storing file: {}", file.display());
+            chunk_file(file, webhooks_clone, db).await;
+        }
+        Command::Retrieve { word } => {
+            println!("Retrieving word: {}", word);
+            retrieve_and_save(db, "rq.rar").await;
+        }
+    }
+
     let duration = start.elapsed();
     println!("Time taken: {:?}s", duration);
 }
