@@ -2,3 +2,6 @@
 config.toml
 trial/
 service_account.json
+chunks/*.part*
+rq.rar
+rq/
