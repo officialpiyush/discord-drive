@@ -23,7 +23,6 @@ use tokio::sync::Semaphore;
 
 const MASTER_DIRECTORY_COLLECTION_NAME: &'static str = "master_directory";
 
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct MasterDirectoryChildPart {
     name: String,
@@ -37,20 +36,6 @@ struct MasterDirectoryChildPart {
 struct MasterDirectoryChild {
     name: String,
     parts: Vec<MasterDirectoryChildPart>,
-}
-
-struct WebhookData {
-    http: Arc<Http>,
-    webhook: Webhook,
-}
-
-impl Clone for WebhookData {
-    fn clone(&self) -> Self {
-        WebhookData {
-            http: self.http.clone(),
-            webhook: self.webhook.clone(),
-        }
-    }
 }
 
 async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_url: String) {
@@ -86,7 +71,7 @@ async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_ur
 }
 
 async fn upload_chunk(
-    webhook_data: WebhookData,
+    webhook_data: structs::drive_config::WebhookData,
     db: FirestoreDb,
     index: i32,
     file_name: String,
@@ -129,7 +114,11 @@ async fn upload_chunk(
     }
 }
 
-async fn chunk_file(file_path: PathBuf, webhook_data: Vec<WebhookData>, db: FirestoreDb) {
+async fn chunk_file(
+    file_path: PathBuf,
+    webhook_data: Vec<structs::drive_config::WebhookData>,
+    db: FirestoreDb,
+) {
     let semaphore = Arc::new(Semaphore::new(24));
 
     let file = std::fs::File::open(&file_path).unwrap();
@@ -288,7 +277,8 @@ async fn main() {
         panic!("No webhooks found in config file")
     }
 
-    let webhooks: Arc<Mutex<Vec<WebhookData>>> = Arc::new(Mutex::new(vec![]));
+    let webhooks: Arc<Mutex<Vec<structs::drive_config::WebhookData>>> =
+        Arc::new(Mutex::new(vec![]));
 
     let http_one = Arc::new(Http::new(""));
     let http_two = Arc::new(Http::new(""));
@@ -310,7 +300,7 @@ async fn main() {
                 .expect(&format!("Failed to get webhook from url: {}", webhook));
             let mut webhook_vec = webhook_clone.lock().unwrap();
             webhook_vec.push({
-                WebhookData {
+                structs::drive_config::WebhookData {
                     http: http.clone(),
                     webhook: webhook.clone(),
                 }
