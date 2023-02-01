@@ -4,7 +4,6 @@ use confy;
 use firestore::*;
 use firestore::{paths, FirestoreDb};
 use futures::future::join_all;
-use serde::{Deserialize, Serialize};
 use serenity::{http::Http, model::webhook::Webhook};
 use std::fs::File;
 use std::io::BufWriter;
@@ -18,25 +17,11 @@ use std::{
     time::Instant,
     vec,
 };
+use structs::directory::*;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 const MASTER_DIRECTORY_COLLECTION_NAME: &'static str = "master_directory";
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct MasterDirectoryChildPart {
-    name: String,
-    id: String,
-    part: i32,
-    parent: String,
-    url: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct MasterDirectoryChild {
-    name: String,
-    parts: Vec<MasterDirectoryChildPart>,
-}
 
 async fn add_to_database(db: FirestoreDb, name: String, part: i32, attachment_url: String) {
     let master_directory_child: MasterDirectoryChildPart = MasterDirectoryChildPart {
