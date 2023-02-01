@@ -1,3 +1,5 @@
+mod structs;
+
 use confy;
 use firestore::*;
 use firestore::{paths, FirestoreDb};
@@ -57,12 +59,6 @@ struct MasterDirectoryChildPart {
 struct MasterDirectoryChild {
     name: String,
     parts: Vec<MasterDirectoryChildPart>,
-}
-
-#[derive(Default, Debug, Serialize, Deserialize)]
-struct DriveConfig {
-    webhooks: Vec<String>,
-    service_account_file_location: String,
 }
 
 struct WebhookData {
@@ -301,7 +297,7 @@ async fn main() {
     let start = Instant::now();
     println!("Hello, world!");
     let config_path = Path::new("config/config.toml");
-    let cfg: DriveConfig = confy::load_path(config_path).unwrap();
+    let cfg: structs::drive_config::DriveConfig = confy::load_path(config_path).unwrap();
 
     set_var(
         "GOOGLE_APPLICATION_CREDENTIALS",
