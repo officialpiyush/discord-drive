@@ -18,33 +18,11 @@ use std::{
     time::Instant,
     vec,
 };
-use structopt::StructOpt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 const MASTER_DIRECTORY_COLLECTION_NAME: &'static str = "master_directory";
 
-#[derive(StructOpt, Debug)]
-#[structopt(name = "discord_drive")]
-struct Opts {
-    #[structopt(subcommand)]
-    command: Command,
-}
-
-#[derive(StructOpt, Debug)]
-enum Command {
-    #[structopt(name = "store")]
-    Store {
-        #[structopt(name = "file", parse(from_os_str))]
-        file: std::path::PathBuf,
-    },
-
-    #[structopt(name = "retrieve")]
-    Retrieve {
-        #[structopt(name = "word")]
-        word: String,
-    },
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct MasterDirectoryChildPart {
@@ -292,7 +270,7 @@ async fn retrieve_and_save(db: FirestoreDb, name: &str) {
 
 #[tokio::main]
 async fn main() {
-    let opts = Opts::from_args();
+    let opts = <structs::cli::Opts as structopt::StructOpt>::from_args();
 
     let start = Instant::now();
     println!("Hello, world!");
@@ -349,7 +327,7 @@ async fn main() {
     let webhooks_clone = webhooks.clone().lock().unwrap().to_vec();
 
     match opts.command {
-        Command::Store { file } => {
+        structs::cli::Command::Store { file } => {
             // check if file is a directory
             if file.is_dir() {
                 eprintln!("Error: {} is a directory", file.display());
@@ -360,7 +338,7 @@ async fn main() {
             println!("Storing file: {}", file.display());
             chunk_file(file, webhooks_clone, db).await;
         }
-        Command::Retrieve { word } => {
+        structs::cli::Command::Retrieve { word } => {
             println!("Retrieving word: {}", word);
             retrieve_and_save(db, "rq.rar").await;
         }
